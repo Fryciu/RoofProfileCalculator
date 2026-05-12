@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:math';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() => runApp(const CadApp());
 
@@ -19,13 +20,11 @@ class Line {
   Line copy() => Line(start, end);
 }
 
-// ============ INTENTS (DEFINITIONS) =============
 class UndoIntent extends Intent {}
 
 class RedoIntent extends Intent {}
 
 class DeleteIntent extends Intent {}
-// ================================================
 
 class CadCanvas extends StatefulWidget {
   const CadCanvas({super.key});
@@ -42,60 +41,74 @@ class _CadCanvasState extends State<CadCanvas> {
   List<List<Line>> _redoStack = [];
   List<Line> profilePreviewLines = [];
   List<Line> profileLongitudinalLines = [];
-  // Wewnątrz _CadCanvasState
+
   double marginX = 0.2;
   double marginY = 0.2;
-  double spacingX =
-      0.6; // Rozstaw profili pionowych (rozmieszczonych wzdłuż osi X)
-  double spacingY =
-      0.6; // Rozstaw profili poziomych (rozmieszczonych wzdłuż osi Y)
+  double spacingX = 0.6;
+  double spacingY = 0.6;
+  double hangerMargin = 0.3;
+  double hangerSpacing = 0.7;
+  double plugWallMargin = 0.1;
+  double plugSpacing = 0.4;
+  double screwsPerMeterSq = 20.0;
 
   late final TextEditingController _marginXController;
   late final TextEditingController _marginYController;
   late final TextEditingController _spacingXController;
   late final TextEditingController _spacingYController;
-
-  // Dodaj te kontrolery w initState (opcjonalnie, by móc sterować tymi wartościami)
-  double hangerMargin = 0.3; // 30 cm
-  double hangerSpacing = 0.7; // 70 cm
   late final TextEditingController _hangerMarginController;
   late final TextEditingController _hangerSpacingController;
-  // Funkcja pomocnicza do obliczania wieszaków na pojedynczej linii
-  double plugWallMargin = 0.1; // 10 cm od ściany
-  double plugSpacing = 0.4; // co 40 cm
   late final TextEditingController _plugWallMarginController;
   late final TextEditingController _plugSpacingController;
-
-  double screwsPerMeterSq = 20.0; // Domyślna wartość
   late final TextEditingController _screwsPerMeterSqController;
+
+  Future<void> _saveValue(String key, double value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(key, value);
+  }
+
+  Future<void> _loadDefaultValues() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      marginX = prefs.getDouble('marginX') ?? 0.2;
+      marginY = prefs.getDouble('marginY') ?? 0.2;
+      spacingX = prefs.getDouble('spacingX') ?? 0.6;
+      spacingY = prefs.getDouble('spacingY') ?? 0.6;
+      hangerSpacing = prefs.getDouble('hangerSpacing') ?? 0.7;
+      hangerMargin = prefs.getDouble('hangerMargin') ?? 0.3;
+      plugSpacing = prefs.getDouble('plugSpacing') ?? 0.4;
+      plugWallMargin = prefs.getDouble('plugWallMargin') ?? 0.1;
+      screwsPerMeterSq = prefs.getDouble('screwsPerMeterSq') ?? 20.0;
+
+      _marginXController.text = marginX.toString();
+      _marginYController.text = marginY.toString();
+      _spacingXController.text = spacingX.toString();
+      _spacingYController.text = spacingY.toString();
+      _hangerSpacingController.text = hangerSpacing.toString();
+      _hangerMarginController.text = hangerMargin.toString();
+      _plugSpacingController.text = plugSpacing.toString();
+      _plugWallMarginController.text = plugWallMargin.toString();
+      _screwsPerMeterSqController.text = screwsPerMeterSq.toString();
+    });
+  }
+
   @override
   void initState() {
     super.initState();
-    _gridController = TextEditingController(text: metersPerGrid.toString());
-    _marginXController = TextEditingController(text: marginX.toString());
-    _marginYController = TextEditingController(text: marginY.toString());
-    _spacingXController = TextEditingController(text: spacingX.toString());
-    _spacingYController = TextEditingController(text: spacingY.toString());
-    _hangerMarginController = TextEditingController(
-      text: hangerMargin.toString(),
-    );
-    _hangerSpacingController = TextEditingController(
-      text: hangerSpacing.toString(),
-    );
-    _keyboardFocusNode = FocusNode()..requestFocus();
-    _plugWallMarginController = TextEditingController(
-      text: plugWallMargin.toString(),
-    );
-    _plugSpacingController = TextEditingController(
-      text: plugSpacing.toString(),
-    );
-    _screwsPerMeterSqController = TextEditingController(
-      text: screwsPerMeterSq.toString(),
-    );
+    _keyboardFocusNode = FocusNode();
+    _marginXController = TextEditingController();
+    _marginYController = TextEditingController();
+    _spacingXController = TextEditingController();
+    _spacingYController = TextEditingController();
+    _hangerSpacingController = TextEditingController();
+    _hangerMarginController = TextEditingController();
+    _plugSpacingController = TextEditingController();
+    _plugWallMarginController = TextEditingController();
+    _screwsPerMeterSqController = TextEditingController();
+    _loadDefaultValues();
   }
 
   String calculationResult = "";
-
   Line? currentLine;
   Offset? _drawingStartPoint;
   int? selectedLineIndex;
@@ -109,18 +122,16 @@ class _CadCanvasState extends State<CadCanvas> {
   bool isMoveMode = false;
   Offset? pendingStartPoint;
 
-  late final TextEditingController _gridController;
+  late final TextEditingController _gridController = TextEditingController();
 
   List<List<Offset>> closedPolygons = [];
 
-  // ---------- Undo/Redo ----------
   void _pushState() {
     _undoStack.add(lines.map((l) => l.copy()).toList());
     _redoStack.clear();
     _computeClosedAreas();
   }
 
-  // ---------- Closed area detection ----------
   List<List<Offset>> _computeClosedAreas() {
     List<List<Offset>> newPolygons = [];
     if (lines.isEmpty) return newPolygons;
@@ -205,7 +216,6 @@ class _CadCanvasState extends State<CadCanvas> {
   Offset _toWorld(Offset screenPos) =>
       screenPos / pixelsPerMeter + cameraOffset;
 
-  // ---------- Snapping ----------
   Offset? _findSnapPoint(Offset touchInMeters, {int? excludeIndex}) {
     Offset? best;
     double bestDist = snapThresholdMeters;
@@ -237,8 +247,6 @@ class _CadCanvasState extends State<CadCanvas> {
         double maxV_Y = max(v.start.dy, v.end.dy);
         double minH_X = min(h.start.dx, h.end.dx);
         double maxH_X = max(h.start.dx, h.end.dx);
-
-        // Sprawdź czy punkt przecięcia (v.x, h.y) leży na obu odcinkach
         if (h.start.dy >= minV_Y &&
             h.start.dy <= maxV_Y &&
             v.start.dx >= minH_X &&
@@ -260,23 +268,18 @@ class _CadCanvasState extends State<CadCanvas> {
     return ys;
   }
 
-  // Wycina poziomą linię (y = const) do wnętrza wielokąta
   List<Line> _clipHorizontalLine(double y, List<Offset> poly) {
     List<double> intersections = [];
     for (int i = 0; i < poly.length; i++) {
       Offset p1 = poly[i];
       Offset p2 = poly[(i + 1) % poly.length];
-
-      // Sprawdź, czy krawędź przecina naszą linię y
       if ((p1.dy <= y && p2.dy > y) || (p2.dy <= y && p1.dy > y)) {
-        // Oblicz współrzędną X przecięcia
         double x = p1.dx + (y - p1.dy) * (p2.dx - p1.dx) / (p2.dy - p1.dy);
         intersections.add(x);
       }
     }
     intersections.sort();
     List<Line> result = [];
-    // Łączymy przecięcia parami: (x0, x1), (x2, x3)...
     for (int i = 0; i < intersections.length - 1; i += 2) {
       if ((intersections[i + 1] - intersections[i]).abs() > 0.001) {
         result.add(
@@ -287,14 +290,11 @@ class _CadCanvasState extends State<CadCanvas> {
     return result;
   }
 
-  // Wycina pionową linię (x = const) do wnętrza wielokąta
   List<Line> _clipVerticalLine(double x, List<Offset> poly) {
     List<double> intersections = [];
     for (int i = 0; i < poly.length; i++) {
       Offset p1 = poly[i];
       Offset p2 = poly[(i + 1) % poly.length];
-
-      // Sprawdź, czy krawędź przecina naszą linię x
       if ((p1.dx <= x && p2.dx > x) || (p2.dx <= x && p1.dx > x)) {
         double y = p1.dy + (x - p1.dx) * (p2.dy - p1.dy) / (p2.dx - p1.dx);
         intersections.add(y);
@@ -349,12 +349,9 @@ class _CadCanvasState extends State<CadCanvas> {
     });
     setState(() {
       closedPolygons = _computeClosedAreas();
-    });
-    setState(() {
       profilePreviewLines = [];
       profileLongitudinalLines = [];
       calculationResult = "";
-      closedPolygons = _computeClosedAreas();
     });
   }
 
@@ -364,7 +361,6 @@ class _CadCanvasState extends State<CadCanvas> {
       profilePreviewLines = [];
       profileLongitudinalLines = [];
       calculationResult = "";
-
       Offset dir = lines[index].end - lines[index].start;
       if (dir.distance > 0) {
         lines[index].end =
@@ -429,20 +425,17 @@ class _CadCanvasState extends State<CadCanvas> {
       return;
     }
 
-    // --- DEKLARACJE ZMIENNYCH STATYSTYCZNYCH ---
     double totalLength = 0;
     int totalCount = 0;
     int totalHangers = 0;
     int totalPlugs = 0;
 
-    // Statystyki dla profili wzdłużnych (tych co 3m)
     int longitudinalCount = 0;
     double longitudinalLength = 0;
 
     List<Line> newPreviewLines = [];
     List<Line> newLongitudinalLines = [];
 
-    // Helper: Czy punkt jest wewnątrz wielokąta
     bool _isInside(Offset p, List<Offset> poly) {
       bool inside = false;
       int n = poly.length;
@@ -459,33 +452,22 @@ class _CadCanvasState extends State<CadCanvas> {
       return inside;
     }
 
-    // Helper: Pozycje wieszaków
     List<double> _getHangerOffsets(Line line) {
       double len = (line.start - line.end).distance;
-      double endMarginLimit =
-          len - hangerMargin; // To jest nasze 4.58m lub 3.03m
-
+      double endMarginLimit = len - hangerMargin;
       if (len < (hangerMargin * 2)) return [];
-
-      List<double> offsets = [hangerMargin]; // Pierwszy punkt (0.3m)
+      List<double> offsets = [hangerMargin];
       double currentPos = hangerMargin;
-
       while (currentPos + hangerSpacing <= endMarginLimit + 0.001) {
         currentPos += hangerSpacing;
         offsets.add(currentPos);
       }
-
-      // KLUCZOWA POPRAWKA:
-      // Jeśli ostatni punkt z pętli jest dalej niż np. 10cm od końca marginesu,
-      // dodaj wieszak dokładnie na końcu marginesu (druga ściana).
       if ((endMarginLimit - currentPos).abs() > 0.05) {
         offsets.add(endMarginLimit);
       }
-
       return offsets;
     }
 
-    // GŁÓWNY ALGORYTM GENEROWANIA POZYCJI PROFILI
     List<double> generatePositions(
       List<Offset> poly,
       bool isX,
@@ -531,32 +513,21 @@ class _CadCanvasState extends State<CadCanvas> {
       return finalPositions;
     }
 
-    // 1. KOŁKI NA OBWODZIE (Sciany)
-    // Logika: 10cm od każdego narożnika i co 40cm pomiędzy nimi
     for (var line in lines) {
       double len = (line.start - line.end).distance;
       if (len >= (plugWallMargin * 2)) {
-        // Startujemy 10cm od początku ściany
         totalPlugs++;
         double currentPos = plugWallMargin;
-
-        // Dodajemy kołki co 40cm (plugSpacing)
         while (currentPos + plugSpacing <= len - plugWallMargin + 0.001) {
           totalPlugs++;
           currentPos += plugSpacing;
         }
-
-        // Dodajemy kołek 10cm przed końcem ściany, jeśli pętla wyżej tam nie dotarła
-        if ((len - plugWallMargin - currentPos).abs() > 0.001) {
-          totalPlugs++;
-        }
+        if ((len - plugWallMargin - currentPos).abs() > 0.001) totalPlugs++;
       } else if (len > 0.02) {
-        // Dla bardzo krótkich odcinków dajemy przynajmniej jeden kołek
         totalPlugs++;
       }
     }
 
-    // 2. PROFILE I WIESZAKI
     for (var poly in closedPolygons) {
       double area = 0;
       for (int i = 0; i < poly.length; i++) {
@@ -579,7 +550,6 @@ class _CadCanvasState extends State<CadCanvas> {
         spacingY,
       );
 
-      // --- PIONOWE (Główne) ---
       List<List<Line>> verticalCols = [];
       for (double x in xPositions) {
         List<Line> segments = _clipVerticalLine(x, poly);
@@ -591,7 +561,6 @@ class _CadCanvasState extends State<CadCanvas> {
         }
       }
 
-      // --- WZDŁUŻNE DLA PIONOWYCH ---
       for (int i = 0; i < verticalCols.length - 1; i++) {
         for (var segL in verticalCols[i]) {
           double len = (segL.start - segL.end).distance;
@@ -603,14 +572,14 @@ class _CadCanvasState extends State<CadCanvas> {
               for (var segR in verticalCols[i + 1]) {
                 if (curY >= min(segR.start.dy, segR.end.dy) &&
                     curY <= max(segR.start.dy, segR.end.dy)) {
-                  Line wzdlozny = Line(
-                    Offset(segL.start.dx, curY),
-                    Offset(segR.start.dx, curY),
+                  newLongitudinalLines.add(
+                    Line(
+                      Offset(segL.start.dx, curY),
+                      Offset(segR.start.dx, curY),
+                    ),
                   );
-                  newLongitudinalLines.add(wzdlozny);
                   longitudinalCount++;
-                  longitudinalLength += (wzdlozny.start.dx - wzdlozny.end.dx)
-                      .abs();
+                  longitudinalLength += (segL.start.dx - segR.start.dx).abs();
                 }
               }
             }
@@ -618,7 +587,6 @@ class _CadCanvasState extends State<CadCanvas> {
         }
       }
 
-      // --- POZIOME (Nośne) + WIESZAKI + KOŁKI ---
       List<List<Line>> horizontalRows = [];
       for (double y in yPositions) {
         List<Line> segments = _clipHorizontalLine(y, poly);
@@ -628,17 +596,12 @@ class _CadCanvasState extends State<CadCanvas> {
           newPreviewLines.add(seg);
           totalCount++;
           totalLength += len;
-
-          // Obliczanie wieszaków dla profilu
           List<double> hOffsets = _getHangerOffsets(seg);
           totalHangers += hOffsets.length;
-
-          // NOWA LOGIKA: Każdy wieszak wymaga jednego kołka
           totalPlugs += hOffsets.length;
         }
       }
 
-      // --- WZDŁUŻNE DLA POZIOMYCH ---
       for (int i = 0; i < horizontalRows.length - 1; i++) {
         for (var segT in horizontalRows[i]) {
           double len = (segT.start - segT.end).distance;
@@ -650,14 +613,14 @@ class _CadCanvasState extends State<CadCanvas> {
               for (var segB in horizontalRows[i + 1]) {
                 if (curX >= min(segB.start.dx, segB.end.dx) &&
                     curX <= max(segB.start.dx, segB.end.dx)) {
-                  Line wzdlozny = Line(
-                    Offset(curX, segT.start.dy),
-                    Offset(curX, segB.start.dy),
+                  newLongitudinalLines.add(
+                    Line(
+                      Offset(curX, segT.start.dy),
+                      Offset(curX, segB.start.dy),
+                    ),
                   );
-                  newLongitudinalLines.add(wzdlozny);
                   longitudinalCount++;
-                  longitudinalLength += (wzdlozny.start.dy - wzdlozny.end.dy)
-                      .abs();
+                  longitudinalLength += (segT.start.dy - segB.start.dy).abs();
                 }
               }
             }
@@ -666,11 +629,9 @@ class _CadCanvasState extends State<CadCanvas> {
       }
     }
 
-    double totalScrews = 0; // Licznik wkrętów
-    double totalArea = 0; // Całkowita powierzchnia
-
+    double totalScrews = 0;
+    double totalArea = 0;
     for (var poly in closedPolygons) {
-      // Obliczanie pola powierzchni wielokąta (metoda sznurowadłowa)
       double area = 0;
       for (int i = 0; i < poly.length; i++) {
         area +=
@@ -678,16 +639,12 @@ class _CadCanvasState extends State<CadCanvas> {
             poly[(i + 1) % poly.length].dx * poly[i].dy);
       }
       area = area.abs() / 2.0;
-
       if (area <= 0) continue;
-
       totalArea += area;
-      // Liczba wkrętów dla tej figury
       totalScrews += area * screwsPerMeterSq;
     }
 
     int intersections = _countIntersections(newPreviewLines);
-
     setState(() {
       profilePreviewLines = newPreviewLines;
       profileLongitudinalLines = newLongitudinalLines;
@@ -804,29 +761,21 @@ class _CadCanvasState extends State<CadCanvas> {
     );
   }
 
-  // ---------- UI helpers ----------
   void _centerViewOnLines() {
     if (lines.isEmpty) return;
-
-    double minX = double.infinity;
-    double minY = double.infinity;
-    double maxX = double.negativeInfinity;
-    double maxY = double.negativeInfinity;
-
+    double minX = double.infinity, minY = double.infinity;
+    double maxX = double.negativeInfinity, maxY = double.negativeInfinity;
     for (var l in lines) {
       minX = min(minX, min(l.start.dx, l.end.dx));
       minY = min(minY, min(l.start.dy, l.end.dy));
       maxX = max(maxX, max(l.start.dx, l.end.dx));
       maxY = max(maxY, max(l.start.dy, l.end.dy));
     }
-
     Rect bounds = Rect.fromLTRB(minX, minY, maxX, maxY);
     Size screenSize = MediaQuery.of(context).size;
-
     Offset screenCenterInMeters =
         Offset(screenSize.width / 2, (screenSize.height - 160) / 2) /
         pixelsPerMeter;
-
     setState(() {
       cameraOffset = bounds.center - screenCenterInMeters;
     });
@@ -845,20 +794,17 @@ class _CadCanvasState extends State<CadCanvas> {
   void _updateDynamicGrid() {
     double targetTileSizePx = 60.0;
     double rawMetersPerGrid = targetTileSizePx / pixelsPerMeter;
-
     double exponent = (log(rawMetersPerGrid) / ln10).floorToDouble();
     double fraction = rawMetersPerGrid / pow(10, exponent);
-
     double niceFraction;
-    if (fraction < 1.5) {
+    if (fraction < 1.5)
       niceFraction = 1.0;
-    } else if (fraction < 3.5) {
+    else if (fraction < 3.5)
       niceFraction = 2.0;
-    } else if (fraction < 7.5) {
+    else if (fraction < 7.5)
       niceFraction = 5.0;
-    } else {
+    else
       niceFraction = 10.0;
-    }
 
     setState(() {
       metersPerGrid = niceFraction * pow(10, exponent);
@@ -873,9 +819,7 @@ class _CadCanvasState extends State<CadCanvas> {
     int? foundIndex;
     for (int i = 0; i < lines.length; i++) {
       double dist = _distToSegment(touchWorld, lines[i].start, lines[i].end);
-      if (dist < (12 / pixelsPerMeter)) {
-        foundIndex = i;
-      }
+      if (dist < (12 / pixelsPerMeter)) foundIndex = i;
     }
     if (foundIndex != null && !isMoveMode) {
       setState(() {
@@ -895,12 +839,9 @@ class _CadCanvasState extends State<CadCanvas> {
     final controller = TextEditingController(
       text: (lines[index].start - lines[index].end).distance.toStringAsFixed(2),
     );
-
     void confirm() {
       double? val = double.tryParse(controller.text);
-      if (val != null) {
-        _editLineLength(index, val);
-      }
+      if (val != null) _editLineLength(index, val);
       Navigator.pop(context);
     }
 
@@ -932,27 +873,21 @@ class _CadCanvasState extends State<CadCanvas> {
   void _globalAutoMerge() {
     if (lines.isEmpty) return;
     _pushState();
-
     setState(() {
-      const double snapThreshold = 0.15; // Tolerancja osi (15cm)
-      const double joinThreshold = 0.05; // Tolerancja styku (5cm)
-
+      const double snapThreshold = 0.15;
+      const double joinThreshold = 0.05;
       List<Line> verticals = [];
       List<Line> horizontals = [];
       List<Line> others = [];
-
-      // 1. Rozdziel i wyprostuj linie
       for (var line in lines) {
         double dx = (line.start.dx - line.end.dx).abs();
         double dy = (line.start.dy - line.end.dy).abs();
         if (dx < 0.1) {
-          // Ujednolicamy X dla pionowych
           double avgX = (line.start.dx + line.end.dx) / 2;
           line.start = Offset(avgX, line.start.dy);
           line.end = Offset(avgX, line.end.dy);
           verticals.add(line);
         } else if (dy < 0.1) {
-          // Ujednolicamy Y dla poziomych
           double avgY = (line.start.dy + line.end.dy) / 2;
           line.start = Offset(line.start.dx, avgY);
           line.end = Offset(line.end.dx, avgY);
@@ -961,18 +896,12 @@ class _CadCanvasState extends State<CadCanvas> {
           others.add(line);
         }
       }
-
-      // 2. Funkcja pomocnicza do łączenia segmentów na jednej osi
       List<Line> mergeSegments(List<Line> segmentList, bool isVertical) {
         if (segmentList.isEmpty) return [];
-
-        // Grupowanie po współrzędnej osi (X dla pionowych, Y dla poziomych)
         List<Line> merged = [];
         while (segmentList.isNotEmpty) {
           Line base = segmentList.removeAt(0);
           double baseCoord = isVertical ? base.start.dx : base.start.dy;
-
-          // Wyciągamy wszystkie linie leżące na tej samej osi (+/- threshold)
           List<Line> colinear = [base];
           segmentList.removeWhere((l) {
             double coord = isVertical ? l.start.dx : l.start.dy;
@@ -982,8 +911,6 @@ class _CadCanvasState extends State<CadCanvas> {
             }
             return false;
           });
-
-          // Łączymy segmenty na tej osi
           if (isVertical) {
             colinear.sort(
               (a, b) => min(
@@ -999,7 +926,6 @@ class _CadCanvasState extends State<CadCanvas> {
               ).compareTo(min(b.start.dx, b.end.dx)),
             );
           }
-
           Line current = colinear[0];
           for (int i = 1; i < colinear.length; i++) {
             Line next = colinear[i];
@@ -1008,9 +934,7 @@ class _CadCanvasState extends State<CadCanvas> {
                       max(current.start.dy, current.end.dy))
                 : (min(next.start.dx, next.end.dx) -
                       max(current.start.dx, current.end.dx));
-
             if (gap < joinThreshold) {
-              // Łączymy (rozciągamy current)
               if (isVertical) {
                 double minY = min(
                   min(current.start.dy, current.end.dy),
@@ -1048,13 +972,11 @@ class _CadCanvasState extends State<CadCanvas> {
         return merged;
       }
 
-      // 3. Wykonaj łączenie i zaktualizuj listę
       lines = [
         ...others,
         ...mergeSegments(verticals, true),
         ...mergeSegments(horizontals, false),
       ];
-
       selectedLineIndex = null;
       closedPolygons = _computeClosedAreas();
       calculationResult = "Automatycznie zsumowano ściany.";
@@ -1064,7 +986,6 @@ class _CadCanvasState extends State<CadCanvas> {
   @override
   void dispose() {
     _keyboardFocusNode.dispose();
-
     _gridController.dispose();
     _marginXController.dispose();
     _marginYController.dispose();
@@ -1075,7 +996,6 @@ class _CadCanvasState extends State<CadCanvas> {
     _plugWallMarginController.dispose();
     _plugSpacingController.dispose();
     _screwsPerMeterSqController.dispose();
-
     super.dispose();
   }
 
@@ -1132,27 +1052,66 @@ class _CadCanvasState extends State<CadCanvas> {
               const DrawerHeader(
                 child: Center(child: Text("USTAWIENIA MONTAŻU")),
               ),
-
               const Text(
-                "Wieszaki (Profile)",
+                "Profile główne (pionowe)",
                 style: TextStyle(
                   color: Colors.blueAccent,
                   fontWeight: FontWeight.bold,
                 ),
               ),
               _buildSideInput(
-                "Pierwszy wieszak (m)",
+                "Margines X (m)",
+                _marginXController,
+                (v) => marginX = v,
+                'marginX',
+              ),
+              _buildSideInput(
+                "Rozstaw X (m)",
+                _spacingXController,
+                (v) => spacingX = v,
+                'spacingX',
+              ),
+              const Divider(),
+              const Text(
+                "Profile główne (poziome)",
+                style: TextStyle(
+                  color: Colors.blueAccent,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              _buildSideInput(
+                "Margines Y (m)",
+                _marginYController,
+                (v) => marginY = v,
+                'marginY',
+              ),
+              _buildSideInput(
+                "Rozstaw Y (m)",
+                _spacingYController,
+                (v) => spacingY = v,
+                'spacingY',
+              ),
+              const Divider(),
+              const Text(
+                "Wieszaki",
+                style: TextStyle(
+                  color: Colors.blueAccent,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              _buildSideInput(
+                "Margines wieszaka (m)",
                 _hangerMarginController,
                 (v) => hangerMargin = v,
+                'hangerMargin',
               ),
               _buildSideInput(
                 "Rozstaw wieszaków (m)",
                 _hangerSpacingController,
                 (v) => hangerSpacing = v,
+                'hangerSpacing',
               ),
-
-              const Divider(height: 40),
-
+              const Divider(),
               const Text(
                 "Kołki montażowe",
                 style: TextStyle(
@@ -1161,16 +1120,31 @@ class _CadCanvasState extends State<CadCanvas> {
                 ),
               ),
               _buildSideInput(
-                "Max dystans kołka (m)",
-                _plugSpacingController,
-                (v) => plugSpacing = v,
-              ),
-              _buildSideInput(
                 "Kołek od ściany (m)",
                 _plugWallMarginController,
                 (v) => plugWallMargin = v,
+                'plugWallMargin',
               ),
-
+              _buildSideInput(
+                "Max rozstaw kołków (m)",
+                _plugSpacingController,
+                (v) => plugSpacing = v,
+                'plugSpacing',
+              ),
+              const Divider(),
+              const Text(
+                "Płyty i wkręty",
+                style: TextStyle(
+                  color: Colors.yellowAccent,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              _buildSideInput(
+                "Wkręty na m²",
+                _screwsPerMeterSqController,
+                (v) => screwsPerMeterSq = v,
+                'screwsPerMeterSq',
+              ),
               const SizedBox(height: 30),
               ElevatedButton.icon(
                 onPressed: () {
@@ -1183,20 +1157,6 @@ class _CadCanvasState extends State<CadCanvas> {
                   backgroundColor: Colors.blueAccent,
                 ),
               ),
-              // Wewnątrz ListView w Drawerze
-              const SizedBox(height: 30),
-              const Text(
-                "Płyty i Wkręty",
-                style: TextStyle(
-                  color: Colors.yellowAccent,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              _buildSideInput(
-                "Wkręty na m²",
-                _screwsPerMeterSqController,
-                (v) => screwsPerMeterSq = v,
-              ),
             ],
           ),
         ),
@@ -1205,114 +1165,66 @@ class _CadCanvasState extends State<CadCanvas> {
         focusNode: _keyboardFocusNode,
         onKey: (RawKeyEvent event) {
           if (event is RawKeyDownEvent) {
-            // Sprawdź, czy focus jest na polu tekstowym
             final focus = FocusManager.instance.primaryFocus;
             final isEditingText =
                 focus?.context?.widget is EditableText ||
                 focus?.context?.findAncestorWidgetOfExactType<TextField>() !=
                     null;
-
-            // Jeśli edytujemy tekst – nie przechwytuj skrótów
             if (isEditingText) return;
-
-            // Ctrl+Z – Undo
             if (HardwareKeyboard.instance.isControlPressed &&
                 event.logicalKey == LogicalKeyboardKey.keyZ) {
               _undo();
               return;
             }
-
-            // Ctrl+Y – Redo
             if (HardwareKeyboard.instance.isControlPressed &&
                 event.logicalKey == LogicalKeyboardKey.keyY) {
               _redo();
               return;
             }
-
-            // Backspace / Delete – usuń linię
             if (event.logicalKey == LogicalKeyboardKey.backspace ||
                 event.logicalKey == LogicalKeyboardKey.delete) {
               _deleteSelected();
-              return;
             }
           }
         },
         child: Column(
           children: [
-            // PANEL GÓRNY – parametry profili
-            // PANEL GÓRNY – parametry profili
             Container(
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               color: Colors.blueGrey[900],
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [
-                    _buildTopInput(
-                      "Marg. Pion (X)",
-                      _marginXController,
-                      (v) => marginX = v,
-                    ),
-                    const SizedBox(width: 8),
-                    _buildTopInput(
-                      "Rozst. Pion (X)",
-                      _spacingXController,
-                      (v) => spacingX = v,
-                    ),
-                    const SizedBox(width: 12),
-                    const SizedBox(
-                      height: 30,
-                      child: VerticalDivider(color: Colors.white24),
-                    ),
-                    const SizedBox(width: 12),
-                    _buildTopInput(
-                      "Marg. Poz (Y)",
-                      _marginYController,
-                      (v) => marginY = v,
-                    ),
-                    const SizedBox(width: 8),
-                    _buildTopInput(
-                      "Rozst. Poz (Y)",
-                      _spacingYController,
-                      (v) => spacingY = v,
-                    ),
-                    const SizedBox(width: 15),
-                    ElevatedButton.icon(
-                      onPressed: _calculateProfiles,
-                      icon: const Icon(Icons.calculate),
-                      label: const Text("Licz"),
-                    ),
-                    // --- KLUCZOWY FRAGMENT WYŚWIETLAJĄCY WYNIK ---
-                    if (calculationResult.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(left: 20),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 6,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.black45,
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(
-                              color: Colors.greenAccent.withOpacity(0.5),
-                            ),
-                          ),
-                          child: Text(
-                            calculationResult,
-                            style: const TextStyle(
-                              color: Colors.greenAccent,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
-                            ),
-                          ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: _calculateProfiles,
+                    icon: const Icon(Icons.calculate),
+                    label: const Text("Licz"),
+                  ),
+                  if (calculationResult.isNotEmpty)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.black45,
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                          color: Colors.greenAccent.withOpacity(0.5),
                         ),
                       ),
-                  ],
-                ),
+                      child: Text(
+                        calculationResult,
+                        style: const TextStyle(
+                          color: Colors.greenAccent,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
-            // OBSZAR RYSOWANIA
             Expanded(
               child: GestureDetector(
                 onTapDown: (_) => FocusScope.of(context).unfocus(),
@@ -1346,15 +1258,12 @@ class _CadCanvasState extends State<CadCanvas> {
                 },
                 onPanUpdate: (d) {
                   if (isPanMode) {
-                    setState(() {
-                      cameraOffset -= d.delta / pixelsPerMeter;
-                    });
+                    setState(() => cameraOffset -= d.delta / pixelsPerMeter);
                     return;
                   }
-
                   Offset touchWorld = _toWorld(d.localPosition);
-
                   if (isMoveMode && selectedLineIndex != null) {
+                    // Przesuwanie linii – tworzymy nowe obiekty i nową listę
                     setState(() {
                       Line line = lines[selectedLineIndex!];
                       Offset delta = d.delta / pixelsPerMeter;
@@ -1372,22 +1281,26 @@ class _CadCanvasState extends State<CadCanvas> {
                       );
 
                       if (snappedStart != null) {
-                        line.start = snappedStart;
-                        line.end = snappedStart + lineVec;
+                        newStart = snappedStart;
+                        newEnd = newStart + lineVec;
                       } else if (snappedEnd != null) {
-                        line.end = snappedEnd;
-                        line.start = snappedEnd - lineVec;
+                        newEnd = snappedEnd;
+                        newStart = newEnd - lineVec;
                       } else {
-                        line.start = newStart;
-                        line.end = newEnd;
+                        newStart = newStart;
+                        newEnd = newEnd;
                       }
+
+                      // Tworzymy nową linię i nową listę, aby wymusić odświeżenie
+                      var newLines = List<Line>.from(lines);
+                      newLines[selectedLineIndex!] = Line(newStart, newEnd);
+                      lines = newLines;
                       closedPolygons = _computeClosedAreas();
                     });
                   } else if (currentLine != null &&
                       _drawingStartPoint != null) {
                     setState(() {
                       final Offset fixedStart = _drawingStartPoint!;
-
                       double dx = (touchWorld.dx - fixedStart.dx).abs();
                       double dy = (touchWorld.dy - fixedStart.dy).abs();
                       bool horizontal = dx > dy;
@@ -1414,7 +1327,8 @@ class _CadCanvasState extends State<CadCanvas> {
                       }
 
                       Offset? pointSnap = _findSnapPoint(endPoint);
-                      currentLine!.end = pointSnap ?? endPoint;
+                      // Tworzymy zupełnie nowy obiekt linii – to naprawia brak odświeżania
+                      currentLine = Line(fixedStart, pointSnap ?? endPoint);
                     });
                   }
                 },
@@ -1473,11 +1387,9 @@ class _CadCanvasState extends State<CadCanvas> {
                         );
                         Offset worldPointAtCenter =
                             screenCenter / pixelsPerMeter + cameraOffset;
-
                         pixelsPerMeter = newZoom;
                         cameraOffset =
                             worldPointAtCenter - (screenCenter / newZoom);
-
                         _updateDynamicGrid();
                       });
                     },
@@ -1517,53 +1429,24 @@ class _CadCanvasState extends State<CadCanvas> {
   Widget _buildSideInput(
     String label,
     TextEditingController controller,
-    Function(double) onUpdate,
+    Function(double) onChanged,
+    String saveKey,
   ) {
-    return TextField(
-      controller: controller,
-      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      decoration: InputDecoration(
-        labelText: label,
-        border: const OutlineInputBorder(), // Poprawne umiejscowienie border
-      ),
-      onChanged: (v) {
-        final val = double.tryParse(v.replaceFirst(',', '.'));
-        if (val != null) setState(() => onUpdate(val));
-      },
-    );
-  }
-
-  Widget _buildTopInput(
-    String label,
-    TextEditingController controller,
-    Function(double) onUpdate,
-  ) {
-    return SizedBox(
-      width: 120,
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
       child: TextField(
         controller: controller,
-        decoration: InputDecoration(
-          labelText: label,
-          isDense: true,
-          labelStyle: const TextStyle(fontSize: 11),
-          border: const OutlineInputBorder(),
-          errorText:
-              double.tryParse(controller.text.replaceFirst(',', '.')) == null
-              ? ""
-              : null,
-        ),
-        style: const TextStyle(fontSize: 13),
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        decoration: InputDecoration(labelText: label, isDense: true),
+        keyboardType: TextInputType.number,
         onChanged: (v) {
-          setState(() {
-            final val = double.tryParse(v.replaceFirst(',', '.'));
-            if (val != null) {
-              onUpdate(val);
-              _isInputValid = true;
-            } else {
-              _isInputValid = false;
-            }
-          });
+          final val = double.tryParse(v.replaceFirst(',', '.'));
+          if (val != null) {
+            onChanged(val);
+            _saveValue(saveKey, val);
+            setState(() => _isInputValid = true);
+          } else {
+            setState(() => _isInputValid = false);
+          }
         },
       ),
     );
@@ -1601,23 +1484,19 @@ class CadPainter extends CustomPainter {
     final profilePaint = Paint()
       ..color = Colors.brown
       ..strokeWidth = 1.5;
-
     for (var line in profilePreviewLines) {
-      Offset p1 = _toScreen(line.start);
-      Offset p2 = _toScreen(line.end);
-      canvas.drawLine(p1, p2, profilePaint);
+      canvas.drawLine(_toScreen(line.start), _toScreen(line.end), profilePaint);
     }
-
     final longitudinalPaint = Paint()
       ..color = Colors.grey
       ..strokeWidth = 1.5;
-
     for (var line in profileLongitudinalLines) {
-      Offset p1 = _toScreen(line.start);
-      Offset p2 = _toScreen(line.end);
-      canvas.drawLine(p1, p2, longitudinalPaint);
+      canvas.drawLine(
+        _toScreen(line.start),
+        _toScreen(line.end),
+        longitudinalPaint,
+      );
     }
-
     final paint = Paint()
       ..color = Colors.white
       ..strokeWidth = 2.0;
@@ -1631,9 +1510,7 @@ class CadPainter extends CustomPainter {
     for (int i = 0; i < lines.length; i++) {
       _drawLine(canvas, lines[i], i == selectedIndex ? selectedPaint : paint);
     }
-    if (currentLine != null) {
-      _drawLine(canvas, currentLine!, activePaint);
-    }
+    if (currentLine != null) _drawLine(canvas, currentLine!, activePaint);
   }
 
   void _drawClosedAreas(Canvas canvas, Size size) {
@@ -1642,11 +1519,9 @@ class CadPainter extends CustomPainter {
       ..style = PaintingStyle.fill;
     for (var poly in closedPolygons) {
       if (poly.length < 3) continue;
-      Path path = Path();
-      Offset first = _toScreen(poly[0]);
-      path.moveTo(first.dx, first.dy);
+      final path = Path()..moveTo(_toScreen(poly[0]).dx, _toScreen(poly[0]).dy);
       for (int i = 1; i < poly.length; i++) {
-        Offset p = _toScreen(poly[i]);
+        final p = _toScreen(poly[i]);
         path.lineTo(p.dx, p.dy);
       }
       path.close();
@@ -1655,11 +1530,10 @@ class CadPainter extends CustomPainter {
   }
 
   void _drawLine(Canvas canvas, Line line, Paint paint) {
-    Offset p1 = _toScreen(line.start);
-    Offset p2 = _toScreen(line.end);
+    final p1 = _toScreen(line.start);
+    final p2 = _toScreen(line.end);
     canvas.drawLine(p1, p2, paint);
-
-    double meters = (line.start - line.end).distance;
+    final meters = (line.start - line.end).distance;
     TextPainter(
         text: TextSpan(
           text: " ${meters.toStringAsFixed(2)}m ",
@@ -1677,26 +1551,27 @@ class CadPainter extends CustomPainter {
 
   void _drawGrid(Canvas canvas, Size size) {
     final p = Paint()..color = Colors.white10;
-    Rect visibleWorld = Rect.fromLTWH(
+    final visibleWorld = Rect.fromLTWH(
       cameraOffset.dx,
       cameraOffset.dy,
       size.width / zoom,
       size.height / zoom,
     );
-    double startX = (visibleWorld.left / gridMeters).floor() * gridMeters;
-    double startY = (visibleWorld.top / gridMeters).floor() * gridMeters;
-    double endX = visibleWorld.right;
-    double endY = visibleWorld.bottom;
-
-    for (double x = startX; x <= endX; x += gridMeters) {
-      Offset start = _toScreen(Offset(x, visibleWorld.top));
-      Offset end = _toScreen(Offset(x, visibleWorld.bottom));
-      canvas.drawLine(start, end, p);
+    final startX = (visibleWorld.left / gridMeters).floor() * gridMeters;
+    final startY = (visibleWorld.top / gridMeters).floor() * gridMeters;
+    for (double x = startX; x <= visibleWorld.right; x += gridMeters) {
+      canvas.drawLine(
+        _toScreen(Offset(x, visibleWorld.top)),
+        _toScreen(Offset(x, visibleWorld.bottom)),
+        p,
+      );
     }
-    for (double y = startY; y <= endY; y += gridMeters) {
-      Offset start = _toScreen(Offset(visibleWorld.left, y));
-      Offset end = _toScreen(Offset(visibleWorld.right, y));
-      canvas.drawLine(start, end, p);
+    for (double y = startY; y <= visibleWorld.bottom; y += gridMeters) {
+      canvas.drawLine(
+        _toScreen(Offset(visibleWorld.left, y)),
+        _toScreen(Offset(visibleWorld.right, y)),
+        p,
+      );
     }
   }
 

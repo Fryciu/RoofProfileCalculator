@@ -35,6 +35,7 @@ class CadCanvas extends StatefulWidget {
 class _CadCanvasState extends State<CadCanvas> {
   List<Line> lines = [];
   bool _isInputValid = true;
+  bool isAxisSwapped = false;
   late FocusNode _keyboardFocusNode;
 
   List<List<Line>> _undoStack = [];
@@ -51,6 +52,8 @@ class _CadCanvasState extends State<CadCanvas> {
   double plugWallMargin = 0.1;
   double plugSpacing = 0.4;
   double screwsPerMeterSq = 20.0;
+  double connectorSpacing = 3.0;
+  double clipsPerConnector = 4.0;
 
   late final TextEditingController _marginXController;
   late final TextEditingController _marginYController;
@@ -61,6 +64,8 @@ class _CadCanvasState extends State<CadCanvas> {
   late final TextEditingController _plugWallMarginController;
   late final TextEditingController _plugSpacingController;
   late final TextEditingController _screwsPerMeterSqController;
+  late final TextEditingController _connectorSpacingController;
+  late final TextEditingController _clipsPerConnectorController;
 
   Future<void> _saveValue(String key, double value) async {
     final prefs = await SharedPreferences.getInstance();
@@ -79,7 +84,11 @@ class _CadCanvasState extends State<CadCanvas> {
       plugSpacing = prefs.getDouble('plugSpacing') ?? 0.4;
       plugWallMargin = prefs.getDouble('plugWallMargin') ?? 0.1;
       screwsPerMeterSq = prefs.getDouble('screwsPerMeterSq') ?? 20.0;
+      connectorSpacing = prefs.getDouble('connectorSpacing') ?? 3.0;
+      clipsPerConnector = prefs.getDouble('clipsPerConnector') ?? 4.0;
 
+      _connectorSpacingController.text = connectorSpacing.toString();
+      _clipsPerConnectorController.text = clipsPerConnector.toString();
       _marginXController.text = marginX.toString();
       _marginYController.text = marginY.toString();
       _spacingXController.text = spacingX.toString();
@@ -96,6 +105,11 @@ class _CadCanvasState extends State<CadCanvas> {
   void initState() {
     super.initState();
     _keyboardFocusNode = FocusNode();
+    _keyboardFocusNode.requestFocus();
+    _lengthEditController = TextEditingController();
+    _lengthEditFocusNode = FocusNode();
+    _connectorSpacingController = TextEditingController();
+    _clipsPerConnectorController = TextEditingController();
     _marginXController = TextEditingController();
     _marginYController = TextEditingController();
     _spacingXController = TextEditingController();
@@ -109,9 +123,28 @@ class _CadCanvasState extends State<CadCanvas> {
   }
 
   String calculationResult = "";
+  int _reportCount = 0;
+  double _reportLength = 0;
+  int _reportConnectors = 0;
+  int _reportHangers = 0;
+  int _reportPlugs = 0;
+  int _reportLongCount = 0;
+  double _reportLongLen = 0;
+  int _reportScrews = 0;
+  double _reportArea = 0;
+  int _reportClips = 0;
+  int _reportCrossConnectors = 0;
+  bool _hasReport = false;
   Line? currentLine;
   Offset? _drawingStartPoint;
-  int? selectedLineIndex;
+  Set<int> selectedIndices = {};
+  bool isMultiSelect = false;
+  int? _lengthEditIndex;
+  Offset? _lengthEditScreenPos;
+  late final TextEditingController _lengthEditController;
+  late final FocusNode _lengthEditFocusNode;
+  Offset? _selectionRectStart;
+  Offset? _selectionRectEnd;
 
   double pixelsPerMeter = 50.0;
   double metersPerGrid = 1.0;
@@ -119,8 +152,9 @@ class _CadCanvasState extends State<CadCanvas> {
 
   Offset cameraOffset = Offset.zero;
   bool isPanMode = false;
-  bool isMoveMode = false;
   Offset? pendingStartPoint;
+  Offset? _lastTapUpPos;
+  DateTime? _lastTapUpTime;
 
   late final TextEditingController _gridController = TextEditingController();
 
@@ -240,7 +274,6 @@ class _CadCanvasState extends State<CadCanvas> {
     List<Line> horizontals = previewLines
         .where((l) => (l.start.dy - l.end.dy).abs() < 0.001)
         .toList();
-
     for (var v in verticals) {
       for (var h in horizontals) {
         double minV_Y = min(v.start.dy, v.end.dy);
@@ -322,12 +355,17 @@ class _CadCanvasState extends State<CadCanvas> {
     return xs;
   }
 
+  Offset _normalizePt(Offset p) => Offset(
+    (p.dx * 100).roundToDouble() / 100,
+    (p.dy * 100).roundToDouble() / 100,
+  );
+
   void _addLine(Line line) {
     _undoStack.add(lines.map((l) => l.copy()).toList());
     _redoStack.clear();
     setState(() {
-      lines.add(line.copy());
-      pendingStartPoint = line.end;
+      lines.add(Line(_normalizePt(line.start), _normalizePt(line.end)));
+      pendingStartPoint = _normalizePt(line.end);
     });
     setState(() {
       closedPolygons = _computeClosedAreas();
@@ -338,35 +376,25 @@ class _CadCanvasState extends State<CadCanvas> {
     if (lines.isEmpty) return;
     _pushState();
     setState(() {
-      if (selectedLineIndex != null) {
-        lines.removeAt(selectedLineIndex!);
-        selectedLineIndex = null;
+      if (selectedIndices.isNotEmpty) {
+        var sorted = selectedIndices.toList()..sort((a, b) => b.compareTo(a));
+        for (var i in sorted) {
+          if (i < lines.length) lines.removeAt(i);
+        }
+        selectedIndices.clear();
       } else {
         lines.clear();
       }
       pendingStartPoint = null;
       currentLine = null;
+      _cancelLengthEdit();
     });
     setState(() {
       closedPolygons = _computeClosedAreas();
       profilePreviewLines = [];
       profileLongitudinalLines = [];
       calculationResult = "";
-    });
-  }
-
-  void _editLineLength(int index, double newLength) {
-    _pushState();
-    setState(() {
-      profilePreviewLines = [];
-      profileLongitudinalLines = [];
-      calculationResult = "";
-      Offset dir = lines[index].end - lines[index].start;
-      if (dir.distance > 0) {
-        lines[index].end =
-            lines[index].start + (dir / dir.distance * newLength);
-      }
-      closedPolygons = _computeClosedAreas();
+      _hasReport = false;
     });
   }
 
@@ -375,7 +403,7 @@ class _CadCanvasState extends State<CadCanvas> {
     setState(() {
       _redoStack.add(lines.map((l) => l.copy()).toList());
       lines = _undoStack.removeLast();
-      selectedLineIndex = null;
+      selectedIndices.clear();
       currentLine = null;
       pendingStartPoint = null;
     });
@@ -389,7 +417,7 @@ class _CadCanvasState extends State<CadCanvas> {
     setState(() {
       _undoStack.add(lines.map((l) => l.copy()).toList());
       lines = _redoStack.removeLast();
-      selectedLineIndex = null;
+      selectedIndices.clear();
       currentLine = null;
       pendingStartPoint = null;
     });
@@ -416,12 +444,16 @@ class _CadCanvasState extends State<CadCanvas> {
       setState(() {
         calculationResult = "BŁĄD: Podano nieprawidłową wartość liczbową!";
         profilePreviewLines = [];
+        _hasReport = false;
       });
       return;
     }
 
     if (closedPolygons.isEmpty) {
-      setState(() => calculationResult = "Brak zamkniętych obszarów!");
+      setState(() {
+        calculationResult = "Brak zamkniętych obszarów!";
+        _hasReport = false;
+      });
       return;
     }
 
@@ -429,6 +461,7 @@ class _CadCanvasState extends State<CadCanvas> {
     int totalCount = 0;
     int totalHangers = 0;
     int totalPlugs = 0;
+    int connectors = 0;
 
     int longitudinalCount = 0;
     double longitudinalLength = 0;
@@ -537,17 +570,22 @@ class _CadCanvasState extends State<CadCanvas> {
       }
       if (area <= 0) continue;
 
+      double xMargin = isAxisSwapped ? marginY : marginX;
+      double xSpacing = isAxisSwapped ? spacingY : spacingX;
+      double yMargin = isAxisSwapped ? marginX : marginY;
+      double ySpacing = isAxisSwapped ? spacingX : spacingY;
+
       List<double> xPositions = generatePositions(
         poly,
         true,
-        marginX,
-        spacingX,
+        xMargin,
+        xSpacing,
       );
       List<double> yPositions = generatePositions(
         poly,
         false,
-        marginY,
-        spacingY,
+        yMargin,
+        ySpacing,
       );
 
       List<List<Line>> verticalCols = [];
@@ -558,6 +596,14 @@ class _CadCanvasState extends State<CadCanvas> {
           newPreviewLines.add(seg);
           totalCount++;
           totalLength += (seg.start - seg.end).distance;
+          if (isAxisSwapped) {
+            List<double> hOffsets = _getHangerOffsets(seg);
+            totalHangers += hOffsets.length;
+            totalPlugs += hOffsets.length;
+            connectors +=
+                (((seg.start - seg.end).distance - 0.0001) / connectorSpacing)
+                    .floor();
+          }
         }
       }
 
@@ -596,9 +642,14 @@ class _CadCanvasState extends State<CadCanvas> {
           newPreviewLines.add(seg);
           totalCount++;
           totalLength += len;
-          List<double> hOffsets = _getHangerOffsets(seg);
-          totalHangers += hOffsets.length;
-          totalPlugs += hOffsets.length;
+          if (!isAxisSwapped) {
+            List<double> hOffsets = _getHangerOffsets(seg);
+            totalHangers += hOffsets.length;
+            totalPlugs += hOffsets.length;
+            connectors +=
+                (((seg.start - seg.end).distance - 0.0001) / connectorSpacing)
+                    .floor();
+          }
         }
       }
 
@@ -643,25 +694,28 @@ class _CadCanvasState extends State<CadCanvas> {
       totalArea += area;
       totalScrews += area * screwsPerMeterSq;
     }
+    totalArea = totalArea / 2.0;
+    totalScrews = totalScrews / 2.0;
 
-    int intersections = _countIntersections(newPreviewLines);
+    int clips = (connectors * clipsPerConnector).round();
+    int crossConnectors = _countIntersections(newPreviewLines);
     setState(() {
       profilePreviewLines = newPreviewLines;
       profileLongitudinalLines = newLongitudinalLines;
       calculationResult = "Statystyki gotowe";
+      _reportCount = totalCount;
+      _reportLength = totalLength;
+      _reportConnectors = connectors;
+      _reportHangers = totalHangers;
+      _reportPlugs = totalPlugs;
+      _reportLongCount = longitudinalCount;
+      _reportLongLen = longitudinalLength;
+      _reportScrews = totalScrews.ceil();
+      _reportArea = totalArea;
+      _reportClips = clips;
+      _reportCrossConnectors = crossConnectors;
+      _hasReport = true;
     });
-
-    _showReportDialog(
-      totalCount,
-      totalLength,
-      intersections,
-      totalHangers,
-      totalPlugs,
-      longitudinalCount,
-      longitudinalLength,
-      totalScrews.ceil(),
-      totalArea,
-    );
   }
 
   void _showReportDialog(
@@ -674,6 +728,8 @@ class _CadCanvasState extends State<CadCanvas> {
     double longLen,
     int screws,
     double area,
+    int clips,
+    int crossConnectors,
   ) {
     showDialog(
       context: context,
@@ -705,23 +761,22 @@ class _CadCanvasState extends State<CadCanvas> {
               const Divider(),
               _resRow("Wieszaki:", "$hangers szt.", color: Colors.cyanAccent),
               _resRow(
+                "Druty:",
+                "$hangers szt.",
+                color: const Color.fromARGB(255, 31, 141, 209),
+              ),
+              _resRow(
                 "Kołki montażowe:",
                 "$plugs szt.",
                 color: Colors.orangeAccent,
               ),
-              _resRow("Łączniki krzyżowe:", "$cross szt."),
-              const SizedBox(height: 10),
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.white10,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: const Text(
-                  "Info: Kołki liczone w punktach wieszaków oraz jako uzupełnienie co 40cm.",
-                  style: TextStyle(fontSize: 10, color: Colors.grey),
-                ),
+              _resRow("Łączniki:", "$cross szt."),
+              _resRow(
+                "Łączniki krzyżowe:",
+                "$crossConnectors szt.",
+                color: Colors.blueGrey,
               ),
+              const SizedBox(height: 10),
               _resRow(
                 "Powierzchnia całkowita:",
                 "${area.toStringAsFixed(2)} m²",
@@ -731,6 +786,7 @@ class _CadCanvasState extends State<CadCanvas> {
                 "$screws szt.",
                 color: Colors.yellowAccent,
               ),
+              _resRow("Pchełki:", "$clips szt.", color: Colors.lightBlueAccent),
               const Divider(),
             ],
           ),
@@ -821,53 +877,81 @@ class _CadCanvasState extends State<CadCanvas> {
       double dist = _distToSegment(touchWorld, lines[i].start, lines[i].end);
       if (dist < (12 / pixelsPerMeter)) foundIndex = i;
     }
-    if (foundIndex != null && !isMoveMode) {
+    if (isMultiSelect) {
       setState(() {
-        selectedLineIndex = foundIndex;
+        if (foundIndex != null) {
+          if (selectedIndices.contains(foundIndex)) {
+            selectedIndices.remove(foundIndex);
+          } else {
+            selectedIndices.add(foundIndex);
+          }
+        }
         pendingStartPoint = null;
       });
-      _showEditDialog(foundIndex);
       return;
     }
     setState(() {
-      selectedLineIndex = foundIndex;
-      if (foundIndex != null) pendingStartPoint = null;
+      if (foundIndex != null) {
+        selectedIndices = {foundIndex};
+        pendingStartPoint = null;
+        _startLengthEdit(foundIndex, touchWorld);
+      } else {
+        selectedIndices.clear();
+        pendingStartPoint = touchWorld;
+        _cancelLengthEdit();
+      }
     });
   }
 
-  void _showEditDialog(int index) {
-    final controller = TextEditingController(
-      text: (lines[index].start - lines[index].end).distance.toStringAsFixed(2),
-    );
-    void confirm() {
-      double? val = double.tryParse(controller.text);
-      if (val != null) _editLineLength(index, val);
-      Navigator.pop(context);
+  void _handleDoubleTap(Offset _) {
+    if (_lengthEditIndex != null) {
+      _lengthEditFocusNode.requestFocus();
+      return;
     }
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text("Ustaw długość (m)"),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          keyboardType: TextInputType.number,
-          onSubmitted: (_) => confirm(),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("Anuluj"),
-          ),
-          ElevatedButton(onPressed: confirm, child: const Text("OK")),
-        ],
-      ),
-    );
   }
 
-  void _resetPendingStart() {
-    setState(() => pendingStartPoint = null);
+  void _startLengthEdit(int index, Offset worldPos) {
+    Offset midWorld = (lines[index].start + lines[index].end) / 2;
+    Offset screenPos = (midWorld - cameraOffset) * pixelsPerMeter;
+    _lengthEditScreenPos = screenPos;
+    _lengthEditIndex = index;
+    double len = (lines[index].start - lines[index].end).distance;
+    _lengthEditController.text = len.toStringAsFixed(2);
+  }
+
+  void _cancelLengthEdit() {
+    _lengthEditIndex = null;
+    _lengthEditScreenPos = null;
+  }
+
+  void _confirmLengthEdit() {
+    if (_lengthEditIndex == null) return;
+    double? val = double.tryParse(_lengthEditController.text);
+    if (val != null && val > 0) {
+      _pushState();
+      setState(() {
+        profilePreviewLines = [];
+        profileLongitudinalLines = [];
+        calculationResult = "";
+        _hasReport = false;
+        Line line = lines[_lengthEditIndex!];
+        Offset dir = line.end - line.start;
+        if (dir.distance <= 0) return;
+        bool isHorizontal = dir.dx.abs() > dir.dy.abs();
+        Offset anchor = isHorizontal
+            ? (line.start.dx < line.end.dx ? line.start : line.end)
+            : (line.start.dy < line.end.dy ? line.start : line.end);
+        Offset newEnd = isHorizontal
+            ? Offset(anchor.dx + val, anchor.dy)
+            : Offset(anchor.dx, anchor.dy + val);
+        line.start = _normalizePt(anchor);
+        line.end = _normalizePt(newEnd);
+        closedPolygons = _computeClosedAreas();
+        _cancelLengthEdit();
+      });
+    } else {
+      _cancelLengthEdit();
+    }
   }
 
   void _globalAutoMerge() {
@@ -977,9 +1061,10 @@ class _CadCanvasState extends State<CadCanvas> {
         ...mergeSegments(verticals, true),
         ...mergeSegments(horizontals, false),
       ];
-      selectedLineIndex = null;
+      selectedIndices.clear();
       closedPolygons = _computeClosedAreas();
       calculationResult = "Automatycznie zsumowano ściany.";
+      _hasReport = false;
     });
   }
 
@@ -996,6 +1081,8 @@ class _CadCanvasState extends State<CadCanvas> {
     _plugWallMarginController.dispose();
     _plugSpacingController.dispose();
     _screwsPerMeterSqController.dispose();
+    _lengthEditController.dispose();
+    _lengthEditFocusNode.dispose();
     super.dispose();
   }
 
@@ -1006,40 +1093,45 @@ class _CadCanvasState extends State<CadCanvas> {
         title: const Text('CAD: Profile i Skala'),
         actions: [
           IconButton(
-            icon: const Icon(
-              Icons.align_horizontal_left,
-              color: Colors.greenAccent,
-            ),
-            tooltip: "Wyrównaj ściany",
+            icon: const Icon(Icons.link, color: Colors.greenAccent),
+            tooltip: "Zescal ściany",
             onPressed: _globalAutoMerge,
           ),
-          IconButton(icon: const Icon(Icons.undo), onPressed: _undo),
-          IconButton(icon: const Icon(Icons.redo), onPressed: _redo),
           IconButton(
-            icon: Icon(
-              isMoveMode ? Icons.open_with : Icons.straighten,
-              color: isMoveMode ? Colors.orangeAccent : Colors.lightBlueAccent,
-            ),
-            onPressed: () => setState(() {
-              isMoveMode = !isMoveMode;
-              selectedLineIndex = null;
-            }),
+            tooltip: "Cofnij (Ctrl+Z)",
+            icon: const Icon(Icons.undo),
+            onPressed: _undo,
           ),
           IconButton(
+            tooltip: "Ponów (Ctrl+Y)",
+            icon: const Icon(Icons.redo),
+            onPressed: _redo,
+          ),
+          IconButton(
+            tooltip: "Usuń (Delete)",
             icon: const Icon(Icons.delete),
             onPressed: _deleteSelected,
           ),
           IconButton(
+            tooltip: isPanMode ? "Tryb rysowania" : "Tryb przesuwania widoku",
             icon: Icon(isPanMode ? Icons.pan_tool : Icons.pan_tool_outlined),
             onPressed: () => setState(() => isPanMode = !isPanMode),
           ),
           IconButton(
-            icon: const Icon(Icons.center_focus_strong),
-            onPressed: _centerViewOnLines,
+            tooltip: "Tryb zaznaczania",
+            icon: Icon(
+              Icons.touch_app,
+              color: isMultiSelect ? Colors.purpleAccent : null,
+            ),
+            onPressed: () => setState(() {
+              isMultiSelect = !isMultiSelect;
+              if (!isMultiSelect) selectedIndices.clear();
+            }),
           ),
           IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _resetPendingStart,
+            tooltip: "Wyśrodkuj widok",
+            icon: const Icon(Icons.center_focus_strong),
+            onPressed: _centerViewOnLines,
           ),
         ],
       ),
@@ -1052,44 +1144,48 @@ class _CadCanvasState extends State<CadCanvas> {
               const DrawerHeader(
                 child: Center(child: Text("USTAWIENIA MONTAŻU")),
               ),
-              const Text(
-                "Profile główne (pionowe)",
-                style: TextStyle(
+              Text(
+                isAxisSwapped
+                    ? "Profile główne (pionowe)"
+                    : "Profile nośne (pionowe)",
+                style: const TextStyle(
                   color: Colors.blueAccent,
                   fontWeight: FontWeight.bold,
                 ),
               ),
               _buildSideInput(
-                "Margines X (m)",
-                _marginXController,
-                (v) => marginX = v,
-                'marginX',
+                isAxisSwapped ? "Margines Y (m)" : "Margines X (m)",
+                isAxisSwapped ? _marginYController : _marginXController,
+                isAxisSwapped ? (v) => marginY = v : (v) => marginX = v,
+                isAxisSwapped ? 'marginY' : 'marginX',
               ),
               _buildSideInput(
-                "Rozstaw X (m)",
-                _spacingXController,
-                (v) => spacingX = v,
-                'spacingX',
+                isAxisSwapped ? "Rozstaw Y (m)" : "Rozstaw X (m)",
+                isAxisSwapped ? _spacingYController : _spacingXController,
+                isAxisSwapped ? (v) => spacingY = v : (v) => spacingX = v,
+                isAxisSwapped ? 'spacingY' : 'spacingX',
               ),
               const Divider(),
-              const Text(
-                "Profile główne (poziome)",
-                style: TextStyle(
+              Text(
+                isAxisSwapped
+                    ? "Profile nośne (poziome)"
+                    : "Profile główne (poziome)",
+                style: const TextStyle(
                   color: Colors.blueAccent,
                   fontWeight: FontWeight.bold,
                 ),
               ),
               _buildSideInput(
-                "Margines Y (m)",
-                _marginYController,
-                (v) => marginY = v,
-                'marginY',
+                isAxisSwapped ? "Margines X (m)" : "Margines Y (m)",
+                isAxisSwapped ? _marginXController : _marginYController,
+                isAxisSwapped ? (v) => marginX = v : (v) => marginY = v,
+                isAxisSwapped ? 'marginX' : 'marginY',
               ),
               _buildSideInput(
-                "Rozstaw Y (m)",
-                _spacingYController,
-                (v) => spacingY = v,
-                'spacingY',
+                isAxisSwapped ? "Rozstaw X (m)" : "Rozstaw Y (m)",
+                isAxisSwapped ? _spacingXController : _spacingYController,
+                isAxisSwapped ? (v) => spacingX = v : (v) => spacingY = v,
+                isAxisSwapped ? 'spacingX' : 'spacingY',
               ),
               const Divider(),
               const Text(
@@ -1145,6 +1241,26 @@ class _CadCanvasState extends State<CadCanvas> {
                 (v) => screwsPerMeterSq = v,
                 'screwsPerMeterSq',
               ),
+              const Divider(),
+              const Text(
+                "Łączniki",
+                style: TextStyle(
+                  color: Colors.blueAccent,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              _buildSideInput(
+                "Rozstaw łączników (m)",
+                _connectorSpacingController,
+                (v) => connectorSpacing = v,
+                'connectorSpacing',
+              ),
+              _buildSideInput(
+                "Pchełki na łącznik",
+                _clipsPerConnectorController,
+                (v) => clipsPerConnector = v,
+                'clipsPerConnector',
+              ),
               const SizedBox(height: 30),
               ElevatedButton.icon(
                 onPressed: () {
@@ -1184,6 +1300,18 @@ class _CadCanvasState extends State<CadCanvas> {
             if (event.logicalKey == LogicalKeyboardKey.backspace ||
                 event.logicalKey == LogicalKeyboardKey.delete) {
               _deleteSelected();
+              return;
+            }
+            if (HardwareKeyboard.instance.isControlPressed &&
+                HardwareKeyboard.instance.isShiftPressed &&
+                event.logicalKey == LogicalKeyboardKey.keyX) {
+              setState(() {
+                isAxisSwapped = !isAxisSwapped;
+                profilePreviewLines = [];
+                calculationResult = "";
+                _hasReport = false;
+              });
+              return;
             }
           }
         },
@@ -1200,169 +1328,388 @@ class _CadCanvasState extends State<CadCanvas> {
                     icon: const Icon(Icons.calculate),
                     label: const Text("Licz"),
                   ),
-                  if (calculationResult.isNotEmpty)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.black45,
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(
-                          color: Colors.greenAccent.withOpacity(0.5),
-                        ),
-                      ),
-                      child: Text(
-                        calculationResult,
-                        style: const TextStyle(
-                          color: Colors.greenAccent,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 14,
-                        ),
-                      ),
-                    ),
                 ],
               ),
             ),
             Expanded(
-              child: GestureDetector(
-                onTapDown: (_) => FocusScope.of(context).unfocus(),
-                onTapUp: (d) => _handleTap(d.localPosition),
-                onPanStart: (d) {
-                  if (isPanMode) return;
-                  setState(() {
-                    profilePreviewLines = [];
-                    calculationResult = "";
-                  });
-                  Offset touchWorld = _toWorld(d.localPosition);
-                  if (isMoveMode && selectedLineIndex != null) {
-                    _pushState();
-                    return;
-                  }
-                  if (selectedLineIndex != null) return;
-                  if (pendingStartPoint != null) {
-                    setState(() {
-                      final start = pendingStartPoint!;
-                      currentLine = Line(start, start);
-                      _drawingStartPoint = start;
-                      pendingStartPoint = null;
-                    });
-                  } else {
-                    Offset start = _findSnapPoint(touchWorld) ?? touchWorld;
-                    setState(() {
-                      currentLine = Line(start, start);
-                      _drawingStartPoint = start;
-                    });
-                  }
-                },
-                onPanUpdate: (d) {
-                  if (isPanMode) {
-                    setState(() => cameraOffset -= d.delta / pixelsPerMeter);
-                    return;
-                  }
-                  Offset touchWorld = _toWorld(d.localPosition);
-                  if (isMoveMode && selectedLineIndex != null) {
-                    // Przesuwanie linii – tworzymy nowe obiekty i nową listę
-                    setState(() {
-                      Line line = lines[selectedLineIndex!];
-                      Offset delta = d.delta / pixelsPerMeter;
-                      Offset newStart = line.start + delta;
-                      Offset newEnd = line.end + delta;
-                      Offset lineVec = line.end - line.start;
-
-                      Offset? snappedStart = _findSnapPoint(
-                        newStart,
-                        excludeIndex: selectedLineIndex,
-                      );
-                      Offset? snappedEnd = _findSnapPoint(
-                        newEnd,
-                        excludeIndex: selectedLineIndex,
-                      );
-
-                      if (snappedStart != null) {
-                        newStart = snappedStart;
-                        newEnd = newStart + lineVec;
-                      } else if (snappedEnd != null) {
-                        newEnd = snappedEnd;
-                        newStart = newEnd - lineVec;
-                      } else {
-                        newStart = newStart;
-                        newEnd = newEnd;
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Stack(
+                      children: [
+                        GestureDetector(
+                          onTapDown: (d) {
+                            FocusScope.of(context).requestFocus(_keyboardFocusNode);
+                          },
+                          onTapUp: (d) {
+                            final now = DateTime.now();
+                            final dt = _lastTapUpTime != null
+                                ? now.difference(_lastTapUpTime!)
+                                : Duration.zero;
+                            if (dt < const Duration(milliseconds: 350) &&
+                                _lastTapUpPos != null &&
+                                (_lastTapUpPos! - d.localPosition).distance < 30) {
+                              _handleDoubleTap(d.localPosition);
+                            } else {
+                              _handleTap(d.localPosition);
+                            }
+                            _lastTapUpTime = now;
+                            _lastTapUpPos = d.localPosition;
+                          },
+                    onPanStart: (d) {
+                      if (isPanMode) return;
+                      setState(() {
+                        profilePreviewLines = [];
+                        calculationResult = "";
+                        _hasReport = false;
+                      });
+                      Offset touchWorld = _toWorld(d.localPosition);
+                      if (_lengthEditIndex != null) {
+                        _confirmLengthEdit();
                       }
-
-                      // Tworzymy nową linię i nową listę, aby wymusić odświeżenie
-                      var newLines = List<Line>.from(lines);
-                      newLines[selectedLineIndex!] = Line(newStart, newEnd);
-                      lines = newLines;
-                      closedPolygons = _computeClosedAreas();
-                    });
-                  } else if (currentLine != null &&
-                      _drawingStartPoint != null) {
-                    setState(() {
-                      final Offset fixedStart = _drawingStartPoint!;
-                      double dx = (touchWorld.dx - fixedStart.dx).abs();
-                      double dy = (touchWorld.dy - fixedStart.dy).abs();
-                      bool horizontal = dx > dy;
-
-                      Offset endPoint;
-                      if (horizontal) {
-                        double? xSnap = _snapFromTable(
-                          touchWorld.dx,
-                          _buildXTable(),
-                        );
-                        endPoint = Offset(
-                          xSnap ?? touchWorld.dx,
-                          fixedStart.dy,
-                        );
-                      } else {
-                        double? ySnap = _snapFromTable(
-                          touchWorld.dy,
-                          _buildYTable(),
-                        );
-                        endPoint = Offset(
-                          fixedStart.dx,
-                          ySnap ?? touchWorld.dy,
-                        );
+                      if (isMultiSelect) {
+                        setState(() {
+                          _selectionRectStart = touchWorld;
+                          _selectionRectEnd = touchWorld;
+                        });
+                        return;
                       }
+                      if (selectedIndices.isNotEmpty) {
+                        _pushState();
+                        return;
+                      }
+                      if (pendingStartPoint != null) {
+                        setState(() {
+                          final start = pendingStartPoint!;
+                          currentLine = Line(start, start);
+                          _drawingStartPoint = start;
+                          pendingStartPoint = null;
+                        });
+                      } else {
+                        Offset start = _findSnapPoint(touchWorld) ?? touchWorld;
+                        setState(() {
+                          currentLine = Line(start, start);
+                          _drawingStartPoint = start;
+                        });
+                      }
+                    },
+                    onPanUpdate: (d) {
+                      if (isPanMode) {
+                        setState(
+                          () => cameraOffset -= d.delta / pixelsPerMeter,
+                        );
+                        return;
+                      }
+                      Offset touchWorld = _toWorld(d.localPosition);
+                      if (_selectionRectStart != null && isMultiSelect) {
+                        setState(() {
+                          _selectionRectEnd = touchWorld;
+                        });
+                        return;
+                      }
+                      if (selectedIndices.isNotEmpty) {
+                        int idx = selectedIndices.first;
+                        setState(() {
+                          Line line = lines[idx];
+                          Offset delta = d.delta / pixelsPerMeter;
+                          Offset newStart = line.start + delta;
+                          Offset newEnd = line.end + delta;
+                          Offset lineVec = line.end - line.start;
 
-                      Offset? pointSnap = _findSnapPoint(endPoint);
-                      // Tworzymy zupełnie nowy obiekt linii – to naprawia brak odświeżania
-                      currentLine = Line(fixedStart, pointSnap ?? endPoint);
-                    });
-                  }
-                },
-                onPanEnd: (_) {
-                  if (currentLine != null &&
-                      (currentLine!.start - currentLine!.end).distance > 0.1) {
-                    _addLine(currentLine!);
-                  }
-                  setState(() {
-                    currentLine = null;
-                    _drawingStartPoint = null;
-                  });
-                },
-                child: Container(
-                  color: const Color(0xFF121212),
-                  child: CustomPaint(
-                    size: Size.infinite,
-                    painter: CadPainter(
-                      lines,
-                      currentLine,
-                      pixelsPerMeter,
-                      metersPerGrid,
-                      selectedLineIndex,
-                      cameraOffset,
-                      closedPolygons,
-                      profilePreviewLines,
-                      profileLongitudinalLines,
+                          Offset? snappedStart = _findSnapPoint(
+                            newStart,
+                            excludeIndex: idx,
+                          );
+                          Offset? snappedEnd = _findSnapPoint(
+                            newEnd,
+                            excludeIndex: idx,
+                          );
+
+                          if (snappedStart != null) {
+                            newStart = snappedStart;
+                            newEnd = newStart + lineVec;
+                          } else if (snappedEnd != null) {
+                            newEnd = snappedEnd;
+                            newStart = newEnd - lineVec;
+                          }
+
+                          var newLines = List<Line>.from(lines);
+                          newLines[idx] = Line(newStart, newEnd);
+                          lines = newLines;
+                          closedPolygons = _computeClosedAreas();
+                        });
+                      } else if (currentLine != null &&
+                          _drawingStartPoint != null) {
+                        setState(() {
+                          final Offset fixedStart = _drawingStartPoint!;
+                          double dx = (touchWorld.dx - fixedStart.dx).abs();
+                          double dy = (touchWorld.dy - fixedStart.dy).abs();
+                          bool horizontal = dx > dy;
+
+                          Offset endPoint;
+                          if (horizontal) {
+                            double? xSnap = _snapFromTable(
+                              touchWorld.dx,
+                              _buildXTable(),
+                            );
+                            endPoint = Offset(
+                              xSnap ?? touchWorld.dx,
+                              fixedStart.dy,
+                            );
+                          } else {
+                            double? ySnap = _snapFromTable(
+                              touchWorld.dy,
+                              _buildYTable(),
+                            );
+                            endPoint = Offset(
+                              fixedStart.dx,
+                              ySnap ?? touchWorld.dy,
+                            );
+                          }
+
+                          double? axisSnap = horizontal
+                              ? _snapFromTable(endPoint.dx, _buildXTable())
+                              : _snapFromTable(endPoint.dy, _buildYTable());
+                          Offset snappedEnd = horizontal
+                              ? Offset(axisSnap ?? endPoint.dx, fixedStart.dy)
+                              : Offset(fixedStart.dx, axisSnap ?? endPoint.dy);
+                          currentLine = Line(fixedStart, snappedEnd);
+                        });
+                      }
+                    },
+                    onPanEnd: (_) {
+                      if (_selectionRectStart != null &&
+                          _selectionRectEnd != null) {
+                        double x1 = _selectionRectStart!.dx;
+                        double y1 = _selectionRectStart!.dy;
+                        double x2 = _selectionRectEnd!.dx;
+                        double y2 = _selectionRectEnd!.dy;
+                        double minX = x1 < x2 ? x1 : x2;
+                        double maxX = x1 > x2 ? x1 : x2;
+                        double minY = y1 < y2 ? y1 : y2;
+                        double maxY = y1 > y2 ? y1 : y2;
+                        setState(() {
+                          for (int i = 0; i < lines.length; i++) {
+                            Offset s = lines[i].start;
+                            Offset e = lines[i].end;
+                            if ((s.dx >= minX &&
+                                    s.dx <= maxX &&
+                                    s.dy >= minY &&
+                                    s.dy <= maxY) ||
+                                (e.dx >= minX &&
+                                    e.dx <= maxX &&
+                                    e.dy >= minY &&
+                                    e.dy <= maxY)) {
+                              selectedIndices.add(i);
+                            }
+                          }
+                          _selectionRectStart = null;
+                          _selectionRectEnd = null;
+                        });
+                        return;
+                      }
+                      if (currentLine != null &&
+                          (currentLine!.start - currentLine!.end).distance >
+                              0.1) {
+                        _addLine(currentLine!);
+                      }
+                      setState(() {
+                        currentLine = null;
+                        _drawingStartPoint = null;
+                      });
+                    },
+                    child: Container(
+                      color: const Color(0xFF121212),
+                      child: CustomPaint(
+                        size: Size.infinite,
+                        painter: CadPainter(
+                          lines,
+                          currentLine,
+                          pixelsPerMeter,
+                          metersPerGrid,
+                          selectedIndices,
+                          cameraOffset,
+                          closedPolygons,
+                          profilePreviewLines,
+                          profileLongitudinalLines,
+                          _selectionRectStart,
+                          _selectionRectEnd,
+                          _lengthEditIndex,
+                        ),
+                      ),
                     ),
                   ),
-                ),
+                  if (_lengthEditIndex != null && _lengthEditScreenPos != null)
+                    Positioned(
+                      left: _lengthEditScreenPos!.dx,
+                      top: _lengthEditScreenPos!.dy,
+                      child: SizedBox(
+                        width: 46,
+                        height: 18,
+                        child: TextField(
+                          controller: _lengthEditController,
+                          focusNode: _lengthEditFocusNode,
+                          keyboardType: TextInputType.number,
+                          style: const TextStyle(
+                            color: Colors.yellowAccent,
+                            fontSize: 12,
+                            height: 1.0,
+                          ),
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            contentPadding: EdgeInsets.zero,
+                            filled: true,
+                            fillColor: Colors.black,
+                            border: InputBorder.none,
+                            suffixText: 'm',
+                            suffixStyle: TextStyle(
+                              color: Colors.yellowAccent,
+                              fontSize: 12,
+                            ),
+                          ),
+                          onSubmitted: (_) => _confirmLengthEdit(),
+                        ),
+                      ),
+                    ),
+                  Positioned(
+                    left: 8,
+                    bottom: 8,
+                    child: Tooltip(
+                      message: "Zamień osie (Ctrl+Shift+X)",
+                      preferBelow: false,
+                      child: GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            isAxisSwapped = !isAxisSwapped;
+                            profilePreviewLines = [];
+                            calculationResult = "";
+                            _hasReport = false;
+                          });
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: isAxisSwapped
+                                ? Colors.blueAccent.withValues(alpha: 0.85)
+                                : Colors.white24,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: DefaultTextStyle(
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              height: 1,
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(
+                                      Icons.arrow_upward,
+                                      size: 14,
+                                      color: Colors.white,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      isAxisSwapped ? "główny" : "nośny",
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(
+                                      Icons.arrow_forward,
+                                      size: 14,
+                                      color: Colors.white,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      isAxisSwapped ? "nośny" : "główny",
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
+            if (_hasReport)
+              Container(
+                width: 240,
+                color: Colors.blueGrey[900],
+                padding: const EdgeInsets.all(16),
+                child: ListView(
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.analytics,
+                            color: Colors.blueAccent),
+                        const SizedBox(width: 10),
+                        Text(
+                          "Pełne Zestawienie",
+                          style: TextStyle(color: Colors.blueGrey[100]),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    _resRow("Profile główne/nośne:",
+                        "${_reportCount} szt."),
+                    _resRow("Długość gł./noś.:",
+                        "${_reportLength.toStringAsFixed(2)} m"),
+                    const Divider(),
+                    _resRow("Profile wzdłużne (3m):",
+                        "${_reportLongCount} szt.",
+                        color: Colors.greenAccent),
+                    _resRow("Długość wzdłużnych:",
+                        "${_reportLongLen.toStringAsFixed(2)} m",
+                        color: Colors.greenAccent),
+                    const Divider(),
+                    _resRow("Wieszaki:", "${_reportHangers} szt.",
+                        color: Colors.cyanAccent),
+                    _resRow("Druty:", "${_reportHangers} szt.",
+                        color: const Color.fromARGB(255, 31, 141, 209)),
+                    _resRow("Kołki montażowe:",
+                        "${_reportPlugs} szt.",
+                        color: Colors.orangeAccent),
+                    _resRow("Łączniki:", "${_reportConnectors} szt."),
+                    _resRow("Łączniki krzyżowe:",
+                        "${_reportCrossConnectors} szt.",
+                        color: Colors.blueGrey),
+                    const SizedBox(height: 10),
+                    _resRow("Powierzchnia całkowita:",
+                        "${_reportArea.toStringAsFixed(2)} m²"),
+                    _resRow("Wkręty (gwoździe):",
+                        "${_reportScrews} szt.",
+                        color: Colors.yellowAccent),
+                    _resRow("Pchełki:", "${_reportClips} szt.",
+                        color: Colors.lightBlueAccent),
+                  ],
+                ),
+              ),
           ],
         ),
+      ),
+      ],
+      ),
       ),
       bottomNavigationBar: Container(
         padding: const EdgeInsets.all(16),
@@ -1410,9 +1757,9 @@ class _CadCanvasState extends State<CadCanvas> {
                 Text(
                   isPanMode
                       ? "🔍 Tryb przesuwania widoku"
-                      : (isMoveMode
-                            ? "↔ Tryb przesuwania linii"
-                            : "📐 Tryb rysowania/edycji"),
+                      : (isMultiSelect
+                            ? "☑️ Zaznacz linie"
+                            : "↔ Przeciągnij = przesuń | Kliknij linię = edytuj długość"),
                   style: TextStyle(
                     fontSize: 10,
                     color: isPanMode ? Colors.orange : Colors.blue,
@@ -1458,22 +1805,28 @@ class CadPainter extends CustomPainter {
   final Line? currentLine;
   final double zoom;
   final double gridMeters;
-  final int? selectedIndex;
+  final Set<int> selectedIndices;
   final Offset cameraOffset;
   final List<List<Offset>> closedPolygons;
   final List<Line> profilePreviewLines;
   final List<Line> profileLongitudinalLines;
+  final Offset? selectionRectStart;
+  final Offset? selectionRectEnd;
+  final int? lengthEditIndex;
 
   CadPainter(
     this.lines,
     this.currentLine,
     this.zoom,
     this.gridMeters,
-    this.selectedIndex,
+    this.selectedIndices,
     this.cameraOffset,
     this.closedPolygons,
     this.profilePreviewLines,
     this.profileLongitudinalLines,
+    this.selectionRectStart,
+    this.selectionRectEnd,
+    this.lengthEditIndex,
   );
 
   @override
@@ -1481,21 +1834,27 @@ class CadPainter extends CustomPainter {
     _drawGrid(canvas, size);
     _drawClosedAreas(canvas, size);
 
+    if (selectionRectStart != null && selectionRectEnd != null) {
+      final rectPaint = Paint()
+        ..color = Colors.purpleAccent.withOpacity(0.2)
+        ..style = PaintingStyle.fill;
+      final rectBorder = Paint()
+        ..color = Colors.purpleAccent
+        ..strokeWidth = 1.5
+        ..style = PaintingStyle.stroke;
+      final r = Rect.fromPoints(
+        _toScreen(selectionRectStart!),
+        _toScreen(selectionRectEnd!),
+      );
+      canvas.drawRect(r, rectPaint);
+      canvas.drawRect(r, rectBorder);
+    }
+
     final profilePaint = Paint()
       ..color = Colors.brown
       ..strokeWidth = 1.5;
     for (var line in profilePreviewLines) {
       canvas.drawLine(_toScreen(line.start), _toScreen(line.end), profilePaint);
-    }
-    final longitudinalPaint = Paint()
-      ..color = Colors.grey
-      ..strokeWidth = 1.5;
-    for (var line in profileLongitudinalLines) {
-      canvas.drawLine(
-        _toScreen(line.start),
-        _toScreen(line.end),
-        longitudinalPaint,
-      );
     }
     final paint = Paint()
       ..color = Colors.white
@@ -1503,12 +1862,25 @@ class CadPainter extends CustomPainter {
     final selectedPaint = Paint()
       ..color = Colors.redAccent
       ..strokeWidth = 3.0;
+    final editingPaint = Paint()
+      ..color = Colors.yellowAccent
+      ..strokeWidth = 4.0;
     final activePaint = Paint()
       ..color = Colors.blueAccent
       ..strokeWidth = 2.0;
 
     for (int i = 0; i < lines.length; i++) {
-      _drawLine(canvas, lines[i], i == selectedIndex ? selectedPaint : paint);
+      Paint lp;
+      bool skipLabel = false;
+      if (i == lengthEditIndex) {
+        lp = editingPaint;
+        skipLabel = true;
+      } else if (selectedIndices.contains(i)) {
+        lp = selectedPaint;
+      } else {
+        lp = paint;
+      }
+      _drawLine(canvas, lines[i], lp, skipLabel: skipLabel);
     }
     if (currentLine != null) _drawLine(canvas, currentLine!, activePaint);
   }
@@ -1529,14 +1901,20 @@ class CadPainter extends CustomPainter {
     }
   }
 
-  void _drawLine(Canvas canvas, Line line, Paint paint) {
+  void _drawLine(
+    Canvas canvas,
+    Line line,
+    Paint paint, {
+    bool skipLabel = false,
+  }) {
     final p1 = _toScreen(line.start);
     final p2 = _toScreen(line.end);
     canvas.drawLine(p1, p2, paint);
+    if (skipLabel) return;
     final meters = (line.start - line.end).distance;
     TextPainter(
         text: TextSpan(
-          text: " ${meters.toStringAsFixed(2)}m ",
+          text: " ${meters.toStringAsFixed(2)} m",
           style: TextStyle(
             backgroundColor: Colors.black,
             color: paint.color,
@@ -1583,9 +1961,12 @@ class CadPainter extends CustomPainter {
       old.currentLine != currentLine ||
       old.zoom != zoom ||
       old.gridMeters != gridMeters ||
-      old.selectedIndex != selectedIndex ||
+      old.selectedIndices != selectedIndices ||
       old.cameraOffset != cameraOffset ||
       old.closedPolygons != closedPolygons ||
       old.profilePreviewLines != profilePreviewLines ||
-      old.profileLongitudinalLines != profileLongitudinalLines;
+      old.profileLongitudinalLines != profileLongitudinalLines ||
+      old.selectionRectStart != selectionRectStart ||
+      old.selectionRectEnd != selectionRectEnd ||
+      old.lengthEditIndex != lengthEditIndex;
 }

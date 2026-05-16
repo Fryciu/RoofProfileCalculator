@@ -740,103 +740,19 @@ class _CadCanvasState extends State<CadCanvas> {
     });
   }
 
-  void _showReportDialog(
-    int count,
-    double length,
-    int cross,
-    int hangers,
-    int plugs,
-    int longCount,
-    double longLen,
-    int screws,
-    double area,
-    int clips,
-    int crossConnectors,
-  ) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Row(
-          children: [
-            Icon(Icons.analytics, color: Colors.blueAccent),
-            SizedBox(width: 10),
-            Text("Pełne Zestawienie"),
-          ],
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _resRow("Profile główne/nośne:", "$count szt."),
-              _resRow("Długość profili:", "${length.toStringAsFixed(2)} m"),
-              const Divider(),
-              _resRow(
-                "Profile wzdłużne (3m):",
-                "$longCount szt.",
-                color: Colors.greenAccent,
-              ),
-              _resRow(
-                "Długość wzdłużnych:",
-                "${longLen.toStringAsFixed(2)} m",
-                color: Colors.greenAccent,
-              ),
-              const Divider(),
-              _resRow("Wieszaki:", "$hangers szt.", color: Colors.cyanAccent),
-              _resRow(
-                "Druty:",
-                "$hangers szt.",
-                color: const Color.fromARGB(255, 31, 141, 209),
-              ),
-              _resRow(
-                "Kołki montażowe:",
-                "$plugs szt.",
-                color: Colors.orangeAccent,
-              ),
-              _resRow(
-                "Łączniki wzdłużne:",
-                "$cross szt.",
-                color: const Color(0xFFCE93D8),
-              ),
-              _resRow(
-                "Łączniki krzyżowe:",
-                "$crossConnectors szt.",
-                color: Colors.blueGrey,
-              ),
-              const SizedBox(height: 10),
-              _resRow(
-                "Powierzchnia całkowita:",
-                "${area.toStringAsFixed(2)} m²",
-              ),
-              _resRow(
-                "Wkręty (gwoździe):",
-                "$screws szt.",
-                color: Colors.yellowAccent,
-              ),
-              _resRow("Pchełki:", "$clips szt.", color: Colors.lightBlueAccent),
-              const Divider(),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("ZAMKNIJ"),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _resRow(String label, String value, {Color? color}) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label),
-          Text(
-            value,
-            style: TextStyle(fontWeight: FontWeight.bold, color: color),
+          Flexible(child: Text(label)),
+          const SizedBox(width: 8),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              value,
+              style: TextStyle(fontWeight: FontWeight.bold, color: color),
+            ),
           ),
         ],
       ),
@@ -1761,7 +1677,8 @@ class _CadCanvasState extends State<CadCanvas> {
                     ),
                   ),
                   GestureDetector(
-                    onTap: () => setState(() => _showSidePanel = !_showSidePanel),
+                    onTap: () =>
+                        setState(() => _showSidePanel = !_showSidePanel),
                     child: Container(
                       color: Colors.blueGrey[800],
                       width: 16,
@@ -1778,122 +1695,126 @@ class _CadCanvasState extends State<CadCanvas> {
                   ),
                   if (_showSidePanel)
                     Container(
-                    width: 240,
-                    color: Colors.blueGrey[900],
-                    padding: const EdgeInsets.all(12),
-                    child: ListView(
-                      children: [
-                        const Text(
-                          "Legenda",
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 12,
-                            color: Colors.white,
+                      width: 240,
+                      color: Colors.blueGrey[900],
+                      padding: const EdgeInsets.all(12),
+                      child: ListView(
+                        children: [
+                          const Text(
+                            "Legenda",
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                              color: Colors.white,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 4),
-                        _legendItem(
-                          const Color.fromARGB(255, 94, 5, 5),
-                          "Profile nośne",
-                          'nosne',
-                        ),
-                        _legendItem(
-                          const Color.fromARGB(255, 202, 18, 58),
-                          "Profile główne",
-                          'glowne',
-                        ),
-                        _legendItem(
-                          Colors.green.withOpacity(0.5),
-                          "Obszary zamknięte",
-                          'obszary',
-                        ),
-                        _legendItem(Colors.white, "Linie użytkownika", 'linie'),
-                        _legendItem(Colors.white10, "Siatka", 'siatka'),
-                        _legendItem(
-                          const Color(0xFF26C6DA),
-                          "Wieszaki / Druty",
-                          'wieszaki',
-                        ),
-                        _legendItem(
-                          const Color(0xFFFF9800),
-                          "Łączniki krzyżowe",
-                          'lacznikiKrzyz',
-                        ),
-                        _legendItem(
-                          const Color(0xFFCE93D8),
-                          "Łączniki wzdłużne",
-                          'laczniki wzdluzne',
-                        ),
-                        if (_hasReport) ...[
-                          const SizedBox(height: 12),
-                          const Divider(),
-                          Row(
-                            children: [
-                              const Icon(
-                                Icons.analytics,
-                                color: Colors.blueAccent,
-                              ),
-                              const SizedBox(width: 10),
-                              Text(
-                                "Pełne Zestawienie",
-                                style: TextStyle(color: Colors.blueGrey[100]),
-                              ),
-                            ],
+                          const SizedBox(height: 4),
+                          _legendItem(
+                            const Color.fromARGB(255, 94, 5, 5),
+                            "Profile nośne",
+                            'nosne',
                           ),
-                          const SizedBox(height: 8),
-                          _resRow(
-                            "Profile główne/nośne:",
-                            "${_reportCount} szt.",
+                          _legendItem(
+                            const Color.fromARGB(255, 202, 18, 58),
+                            "Profile główne",
+                            'glowne',
                           ),
-                          _resRow(
-                            "Długość gł./noś.:",
-                            "${_reportLength.toStringAsFixed(2)} m",
+                          _legendItem(
+                            Colors.green.withOpacity(0.5),
+                            "Obszary zamknięte",
+                            'obszary',
                           ),
-                          const Divider(),
-                          _resRow(
-                            "Wieszaki:",
-                            "${_reportHangers} szt.",
-                            color: Colors.cyanAccent,
+                          _legendItem(
+                            Colors.white,
+                            "Linie użytkownika",
+                            'linie',
                           ),
-                          _resRow(
-                            "Druty:",
-                            "${_reportHangers} szt.",
-                            color: const Color.fromARGB(255, 31, 141, 209),
+                          _legendItem(Colors.white10, "Siatka", 'siatka'),
+                          _legendItem(
+                            const Color(0xFF26C6DA),
+                            "Wieszaki / Druty",
+                            'wieszaki',
                           ),
-                          _resRow(
-                            "Kołki montażowe:",
-                            "${_reportPlugs} szt.",
-                            color: Colors.orangeAccent,
+                          _legendItem(
+                            const Color(0xFFFF9800),
+                            "Łączniki krzyżowe",
+                            'lacznikiKrzyz',
                           ),
-                          _resRow(
-                            "Łączniki wzdłużne:",
-                            "${_reportConnectors} szt.",
-                            color: Color(0xFFCE93D8),
+                          _legendItem(
+                            const Color(0xFFCE93D8),
+                            "Łączniki wzdłużne",
+                            'laczniki wzdluzne',
                           ),
-                          _resRow(
-                            "Łączniki krzyżowe:",
-                            "${_reportCrossConnectors} szt.",
-                            color: Colors.blueGrey,
-                          ),
-                          const SizedBox(height: 8),
-                          _resRow(
-                            "Powierzchnia całkowita:",
-                            "${_reportArea.toStringAsFixed(2)} m²",
-                          ),
-                          _resRow(
-                            "Wkręty (gwoździe):",
-                            "${_reportScrews} szt.",
-                            color: Colors.yellowAccent,
-                          ),
-                          _resRow(
-                            "Pchełki:",
-                            "${_reportClips} szt.",
-                            color: Colors.lightBlueAccent,
-                          ),
+                          if (_hasReport) ...[
+                            const SizedBox(height: 12),
+                            const Divider(),
+                            Row(
+                              children: [
+                                const Icon(
+                                  Icons.analytics,
+                                  color: Colors.blueAccent,
+                                ),
+                                const SizedBox(width: 10),
+                                Text(
+                                  "Pełne Zestawienie",
+                                  style: TextStyle(color: Colors.blueGrey[100]),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            _resRow(
+                              "Profile główne/nośne:",
+                              "${_reportCount} szt.",
+                            ),
+                            _resRow(
+                              "Długość gł./noś.:",
+                              "${_reportLength.toStringAsFixed(2)} m",
+                            ),
+                            const Divider(),
+                            _resRow(
+                              "Wieszaki:",
+                              "${_reportHangers} szt.",
+                              color: Colors.cyanAccent,
+                            ),
+                            _resRow(
+                              "Druty:",
+                              "${_reportHangers} szt.",
+                              color: const Color.fromARGB(255, 31, 141, 209),
+                            ),
+                            _resRow(
+                              "Kołki montażowe:",
+                              "${_reportPlugs} szt.",
+                              color: Colors.orangeAccent,
+                            ),
+                            _resRow(
+                              "Łączniki wzdłużne:",
+                              "${_reportConnectors} szt.",
+                              color: Color(0xFFCE93D8),
+                            ),
+                            _resRow(
+                              "Łączniki krzyżowe:",
+                              "${_reportCrossConnectors} szt.",
+                              color: Colors.blueGrey,
+                            ),
+                            const SizedBox(height: 8),
+                            _resRow(
+                              "Powierzchnia całkowita:",
+                              "${_reportArea.toStringAsFixed(2)} m²",
+                            ),
+                            _resRow(
+                              "Wkręty (gwoździe):",
+                              "${_reportScrews} szt.",
+                              color: Colors.yellowAccent,
+                            ),
+                            _resRow(
+                              "Pchełki:",
+                              "${_reportClips} szt.",
+                              color: Colors.lightBlueAccent,
+                            ),
+                          ],
                         ],
-                      ],
+                      ),
                     ),
-                  ),
                 ],
               ),
             ),
